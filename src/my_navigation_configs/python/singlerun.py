@@ -29,7 +29,7 @@ def getMap(p, folder):
     Saves the map every 60 seconds
     """
     minutes = 0
-    maxmapsave = 60
+    maxmapsave = 100
     seconds_mapsave = 60
 
     if not exists(join(folder, "Maps/")):
