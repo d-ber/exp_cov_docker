@@ -53,6 +53,7 @@ def getMap(p, folder):
             print("cannot convert")
 
         if int(minutes) > maxmapsave:
+            saveMap(folder)
             print("KILLING PROCESS DUE TO TIMEOUT")
             killProcess(p)
             return
