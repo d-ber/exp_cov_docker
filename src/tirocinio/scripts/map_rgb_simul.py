@@ -84,7 +84,7 @@ def translate_obj(obj_img, movement_area, img, dist_tra, dist_rot, show_steps, d
     return (dst, dx, dy)
 
 
-def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=False, show_steps=False, save_map=False, sizex=20, sizey=20):
+def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=False, show_steps=False, save_map=False, sizex=20, sizey=20, silent=False):
     # Copy
     image_objects_removed = image.copy()
     
@@ -106,6 +106,32 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
     color_mask_movement = cv2.inRange(hsv_movement, lower_ranges_movement, upper_ranges_movement) 
     # Find contours in the mask
     contours_movement = cv2.findContours(color_mask_movement, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+
+    # HSV ranges for closed doors (orange) and open doors (purple)
+    door_colors = ("orange", "purple") 
+    lower_door_range = (np.array([10, 100, 100]), np.array([130, 50, 50]))
+    upper_door_range = (np.array([20, 255, 255]), np.array([160, 255, 255]))
+
+    #Find doors
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    closed_doors_mask = cv2.inRange(hsv, lower_door_range[door_colors.index("orange")], upper_door_range[door_colors.index("orange")])
+    closed_doors_mask_dilated = cv2.dilate(closed_doors_mask, kernel, iterations=1)
+    open_doors_mask = cv2.inRange(hsv, lower_door_range[door_colors.index("purple")], upper_door_range[door_colors.index("purple")])
+    open_doors_mask_dilated = cv2.dilate(open_doors_mask, kernel, iterations=1)
+
+    open_doors = cv2.findContours(open_doors_mask_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+    closed_doors = cv2.findContours(closed_doors_mask_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+
+    # probability for orange/purple doors (0.05 prob to have a close door -> 0.95 of having it open)
+    p_doors = 0.05
+    bernoulli_doors = st.bernoulli(p_doors)
+
+    hsv = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    image_objects_removed[np.where(closed_doors_mask > 0)] = [255, 255, 255]
+    hsv[np.where(closed_doors_mask > 0)] = [255, 255, 255]
+    image_objects_removed[np.where(open_doors_mask > 0)] = [255, 255, 255]
+    hsv[np.where(open_doors_mask > 0)] = [255, 255, 255]
+    hsv = cv2.cvtColor(hsv, cv2.COLOR_BGR2HSV)
 
     color_masks = []
     images_with_boxes = []
@@ -176,6 +202,34 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
         # Set the pixels in the original image where the color is extracted to white
         image_objects_removed[np.where(color_masks[i] > 0)] = [255, 255, 255]
 
+    translated_objs_image = image_objects_removed
+    
+    for closed_door in closed_doors:
+        for open_door in open_doors:
+            mask_open = np.zeros_like(hsv)
+            cv2.drawContours(mask_open, [open_door], -1, (255,255,255), cv2.FILLED)
+            mask_closed = np.zeros_like(hsv)
+            cv2.drawContours(mask_closed, [closed_door], -1, (255,255,255), cv2.FILLED)
+            overlapped = cv2.bitwise_and(mask_open, mask_closed)
+            overlap = np.count_nonzero(overlapped)
+            if overlap > 0:
+                mask_eroded = cv2.erode(mask_open, kernel, iterations=1)
+                if bernoulli_doors.rvs():
+                    mask_eroded = cv2.erode(mask_closed, kernel, iterations=1)
+                #_ = plt.subplot(111), plt.imshow(cv2.cvtColor(mask_eroded, cv2.COLOR_BGR2RGB)), plt.title('mask')
+                #plt.show()
+                translated_objs_image = cv2.bitwise_and(translated_objs_image, cv2.bitwise_not(mask_eroded))
+                #_ = plt.subplot(111), plt.imshow(cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)), plt.title('image')
+                #plt.show()
+                break
+            #_ = plt.subplot(311), plt.imshow(cv2.cvtColor(mask_closed, cv2.COLOR_BGR2RGB)), plt.title('closed')
+            #_ = plt.subplot(312), plt.imshow(cv2.cvtColor(mask_open, cv2.COLOR_BGR2RGB)), plt.title('open')
+            #_ = plt.subplot(313), plt.imshow(cv2.cvtColor(overlapped, cv2.COLOR_BGR2RGB)), plt.title('and')
+            #plt.show()
+
+    #_ = plt.subplot(111), plt.imshow(cv2.cvtColor(translated_objs_image, cv2.COLOR_BGR2RGB)), plt.title('image doors closed or open')
+    #plt.show()
+
     # translational probability red and blu obstacles
     mean_tra = 0
     std_tra = 10
@@ -195,7 +249,6 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
     p = 0.5
     bernoulli_clutter = st.bernoulli(p)
 
-    translated_objs_image = image_objects_removed
     rectangles_info = []
     contours_green_translated = list(contours[colors.index("green")])
     green_idx = 0
@@ -272,7 +325,8 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
         # Write JSON data to a file
         with open(rectangles_path, 'w') as json_file:
             json_file.write(json_data)
-            print("Saved rectangles info as {}".format(rectangles_path))
+            if not silent:
+                print("Saved rectangles info as {}".format(rectangles_path))
 
     return translated_objs_image
 
@@ -347,6 +401,8 @@ def parse_args():
         help="Number of meters per pixel in png map.")
     parser.add_argument("--world-num", type=check_positive_or_zero, default=None, metavar="N",
         help="Use this to produce a maps that ends in N and save it. Setting this argument overrides --worlds.")    
+    parser.add_argument('--silent', action='store_true',
+        help="Use this to avoid printing info.")   
     return parser.parse_args()
 
 def get_world_text(image, name, speedup, pose, scale, sizex, sizey):
@@ -463,6 +519,7 @@ def main():
     pose = args.pose
     scale = args.scale
     world_num = args.world_num
+    silent = args.silent
 
 
     movement_mask_image = cv2.imread(movement_mask_image_path, cv2.IMREAD_COLOR)
@@ -480,7 +537,7 @@ def main():
                 rectangles_path = os.path.join(base_dir, "rectangles.json")
             else:
                 rectangles_path = os.path.join(base_dir, 'rectangles_' + str(time.time_ns()) + '.json')
-            image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=save_map, sizex=sizex, sizey=sizey)
+            image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=save_map, sizex=sizex, sizey=sizey, silent=silent)
 
             if save_map:
                 if no_timestamp:
@@ -495,14 +552,16 @@ def main():
                         filename = os.path.join(base_dir, "image_" + str(time.time_ns()) + ".png")
                 
                 cv2.imwrite(filename, image_modified)
-                print("Saved map as {}".format(filename))
+                if not silent:
+                    print("Saved map as {}".format(filename))
         else:
             for i in range(batch):
                 rectangles_path = os.path.join(base_dir, 'rectangles_' + str(i) + '.json')
-                image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True, sizex=sizex, sizey=sizey)
+                image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True, sizex=sizex, sizey=sizey, silent=silent)
                 filename = os.path.join(base_dir, "image_" + str(i) + ".png")
                 cv2.imwrite(filename, image_modified)
-                print("Saved map as {}".format(filename))
+                if not silent:
+                    print("Saved map as {}".format(filename))
     elif world_num is not None:
 
         name = os.path.basename(os.path.splitext(image_path)[0])
@@ -511,14 +570,16 @@ def main():
         bitmaps_dir = os.path.join(base_dir, "bitmaps")
         if not os.path.exists(bitmaps_dir) or not os.path.isdir(bitmaps_dir):
             os.makedirs(bitmaps_dir)
-        image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True, sizex=sizex, sizey=sizey)
+        image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True, sizex=sizex, sizey=sizey, silent=silent)
         filename = os.path.join(base_dir, "bitmaps/image{}.png".format(i))
         cv2.imwrite(filename, image_modified)
-        print("Saved map as {}".format(filename))
+        if not silent:
+            print("Saved map as {}".format(filename))
         worldfile_path = os.path.join(base_dir, "world{}.world".format(i))
         with open(worldfile_path, "w", encoding="utf-8") as worldfile:
             worldfile.write(get_world_text(i, name, speedup, pose, scale, sizex, sizey))
-            print("Saved worldfile as {}".format(worldfile_path))
+            if not silent:
+                print("Saved worldfile as {}".format(worldfile_path))
     else:
 
         name = os.path.basename(os.path.splitext(image_path)[0])
@@ -527,14 +588,16 @@ def main():
             bitmaps_dir = os.path.join(base_dir, "bitmaps")
             if not os.path.exists(bitmaps_dir) or not os.path.isdir(bitmaps_dir):
                 os.makedirs(bitmaps_dir)
-            image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True, sizex=sizex, sizey=sizey)
+            image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True, sizex=sizex, sizey=sizey, silent=silent)
             filename = os.path.join(base_dir, "bitmaps/image{}.png".format(i))
             cv2.imwrite(filename, image_modified)
-            print("Saved map as {}".format(filename))
+            if not silent:
+                print("Saved map as {}".format(filename))
             worldfile_path = os.path.join(base_dir, "world{}.world".format(i))
             with open(worldfile_path, "w", encoding="utf-8") as worldfile:
                 worldfile.write(get_world_text(i, name, speedup, pose, scale, sizex, sizey))
-                print("Saved worldfile as {}".format(worldfile_path))
+                if not silent:
+                    print("Saved worldfile as {}".format(worldfile_path))
 
 if __name__ == "__main__":
     main()
