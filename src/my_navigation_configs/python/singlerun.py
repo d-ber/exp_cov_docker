@@ -12,6 +12,7 @@ from geometry_msgs.msg import PoseStamped
 import traceback
 import shutil
 import re
+import argparse
 
 lastUpdate = 0
 
@@ -28,7 +29,7 @@ def getMap(p, folder):
     Saves the map every 60 seconds
     """
     minutes = 0
-    maxmapsave = 60
+    maxmapsave = 100
     seconds_mapsave = 60
 
     if not exists(join(folder, "Maps/")):
@@ -52,6 +53,7 @@ def getMap(p, folder):
             print("cannot convert")
 
         if int(minutes) > maxmapsave:
+            saveMap(folder)
             print("KILLING PROCESS DUE TO TIMEOUT")
             killProcess(p)
             return
@@ -89,40 +91,52 @@ def saveMap(folder):
 
 def checkActiveGoal(process, folder):
     global lastUpdate
-    firstRun = True
+    MAX_EXPLORE = 5
+    explore_num = 0
     print("Started goal Thread, ")
     while True:
         time.sleep(3)
         print(f"-- Delta since last update: {rospy.get_rostime().secs - lastUpdate} ")
         if process.poll() is not None or rospy.get_rostime().secs - lastUpdate > 500:
-            if firstRun:
+            if explore_num < MAX_EXPLORE:
                 print("Restarting explore node to finish exploration")
                 p = Popen("rosnode kill explore", shell=True)
                 p.wait()
-                firstRun = False
+                explore_num += 1
                 lastUpdate = rospy.get_rostime().secs - 100
                 continue
-            saveMap(folder)
-            print("SHUTTING DOWN DUE TO GOAL TIMEOUT")
-            killProcess(process)
-            return
+            else:
+                saveMap(folder)
+                print("SHUTTING DOWN DUE TO GOAL TIMEOUT")
+                killProcess(process)
+                return
 
 
-def launchNavigation(world, folder, rectangles_path):
+def launchNavigation(world, folder, rectangles_path, no_bag, record_all_topics):
     """
     Calls the launch file and starts the exploration, waits until the process is done
     """
     p = None
+    bag_arg = "true"
+    record_all_topics_arg = "false"
+    if no_bag:
+        bag_arg = "false"
+    if record_all_topics:
+        record_all_topics_arg = "true"
     try:
         launchString = (
-            "roslaunch my_navigation_configs exploreambient_gmapping.launch worldfile:="
+            "roslaunch my_navigation_configs exploreambient_slam_toolbox.launch worldfile:="
             + world
             + " bag:="
             + folder
-            + os.path.basename(folder)
+            + "bag"
             + ".bag "
             + " rectangles_path:=" 
             + rectangles_path
+            + " record_bag:="
+            + bag_arg
+            + " bag_all:="
+            + record_all_topics_arg
         )
 
         p = Popen(launchString, shell=True, preexec_fn=setsid)
@@ -153,7 +167,7 @@ def extract_number(worldname):
         return num.group(0)
     return None
 
-def exploreWorlds(project_path, world_path):
+def exploreWorlds(project_path, world_path, no_bag, record_all_topics):
     """
     Given a folder with world file it runs 5 times each environment exploration
     """
@@ -175,25 +189,42 @@ def exploreWorlds(project_path, world_path):
             if int(i[3:]) >= maxrun:
                 maxrun = int(i[3:])
         run_folder = join(folder, "run" + str(maxrun + 1) + "/")
-        if not exists(run_folder):
-            makedirs(run_folder)
+        run_folder_bitmaps = os.path.join(run_folder, "bitmaps")
+        if not exists(run_folder_bitmaps):
+            makedirs(run_folder_bitmaps)
 
-        #Save Bitmap and Rectangles too
+        #Save Bitmap, World and Rectangles too
         worldnum = extract_number(os.path.basename(world_path))
         if worldnum:
             rect_path = os.path.join(os.path.dirname(world_path), f"bitmaps/rectangles{worldnum}.json")
             bitmap_path = os.path.join(os.path.dirname(world_path), f"bitmaps/image{worldnum}.png")
-            shutil.copy(rect_path, run_folder)
-            shutil.copy(bitmap_path, run_folder)
+            shutil.copy(rect_path, run_folder_bitmaps)
+            shutil.copy(bitmap_path, run_folder_bitmaps)
+            shutil.copy(world_path, run_folder)
+
+            time.sleep(4)
 
             print("START")
-            launchNavigation(world_path, run_folder, rect_path)
+            launchNavigation(world_path, run_folder, rect_path, no_bag, record_all_topics)
             print("END")
             time.sleep(1)
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Start a single exploration run.')
+    parser.add_argument("--world", metavar="WORLD_PATH", required=True,
+        help="Path to world file.")    
+    parser.add_argument("--no-bag",  action='store_true', default=False,
+        help="Use this to disable bag recording, default behaviour is enabled.") 
+    parser.add_argument("--bag-all",  action='store_true', default=False,
+        help="Use this to record all topics, default behaviour is disabled, i.e. only /odom /base_pose_ground_truth and /base_scan are recorded.") 
+    return parser.parse_args()
 
 if __name__ == "__main__":
+    time.sleep(4)
+    args = parse_args()
+    world_path = args.world
+    no_bag = args.no_bag
+    record_all_topics = args.bag_all
     # retrieve current path
-    project = os.path.expanduser("~/catkin_ws/src/my_navigation_configs")
-    world_path = os.path.abspath(sys.argv[1])
-    exploreWorlds(project, world_path)
+    project = os.path.expanduser("~/catkin_ws/src/my_navigation_configs")        
+    exploreWorlds(project, world_path, no_bag, record_all_topics)

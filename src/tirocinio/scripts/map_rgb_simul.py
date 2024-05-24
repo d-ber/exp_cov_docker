@@ -5,7 +5,7 @@ import scipy.stats as st
 import os
 import time
 import json
-import rospkg
+#import rospkg
 import argparse
 
 # obj_img is a b&w image, in which the object is black and the background white
@@ -84,7 +84,7 @@ def translate_obj(obj_img, movement_area, img, dist_tra, dist_rot, show_steps, d
     return (dst, dx, dy)
 
 
-def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=False, show_steps=False, save_map=False):
+def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=False, show_steps=False, save_map=False, sizex=20, sizey=20, silent=False):
     # Copy
     image_objects_removed = image.copy()
     
@@ -106,6 +106,32 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
     color_mask_movement = cv2.inRange(hsv_movement, lower_ranges_movement, upper_ranges_movement) 
     # Find contours in the mask
     contours_movement = cv2.findContours(color_mask_movement, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+
+    # HSV ranges for closed doors (orange) and open doors (purple)
+    door_colors = ("orange", "purple") 
+    lower_door_range = (np.array([10, 100, 100]), np.array([130, 50, 50]))
+    upper_door_range = (np.array([20, 255, 255]), np.array([160, 255, 255]))
+
+    #Find doors
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    closed_doors_mask = cv2.inRange(hsv, lower_door_range[door_colors.index("orange")], upper_door_range[door_colors.index("orange")])
+    closed_doors_mask_dilated = cv2.dilate(closed_doors_mask, kernel, iterations=1)
+    open_doors_mask = cv2.inRange(hsv, lower_door_range[door_colors.index("purple")], upper_door_range[door_colors.index("purple")])
+    open_doors_mask_dilated = cv2.dilate(open_doors_mask, kernel, iterations=1)
+
+    open_doors = cv2.findContours(open_doors_mask_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+    closed_doors = cv2.findContours(closed_doors_mask_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+
+    # probability for orange/purple doors (0.05 prob to have a close door -> 0.95 of having it open)
+    p_doors = 0.05
+    bernoulli_doors = st.bernoulli(p_doors)
+
+    hsv = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    image_objects_removed[np.where(closed_doors_mask > 0)] = [255, 255, 255]
+    hsv[np.where(closed_doors_mask > 0)] = [255, 255, 255]
+    image_objects_removed[np.where(open_doors_mask > 0)] = [255, 255, 255]
+    hsv[np.where(open_doors_mask > 0)] = [255, 255, 255]
+    hsv = cv2.cvtColor(hsv, cv2.COLOR_BGR2HSV)
 
     color_masks = []
     images_with_boxes = []
@@ -176,6 +202,34 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
         # Set the pixels in the original image where the color is extracted to white
         image_objects_removed[np.where(color_masks[i] > 0)] = [255, 255, 255]
 
+    translated_objs_image = image_objects_removed
+    
+    for closed_door in closed_doors:
+        for open_door in open_doors:
+            mask_open = np.zeros_like(hsv)
+            cv2.drawContours(mask_open, [open_door], -1, (255,255,255), cv2.FILLED)
+            mask_closed = np.zeros_like(hsv)
+            cv2.drawContours(mask_closed, [closed_door], -1, (255,255,255), cv2.FILLED)
+            overlapped = cv2.bitwise_and(mask_open, mask_closed)
+            overlap = np.count_nonzero(overlapped)
+            if overlap > 0:
+                mask_eroded = cv2.erode(mask_open, kernel, iterations=1)
+                if bernoulli_doors.rvs():
+                    mask_eroded = cv2.erode(mask_closed, kernel, iterations=1)
+                #_ = plt.subplot(111), plt.imshow(cv2.cvtColor(mask_eroded, cv2.COLOR_BGR2RGB)), plt.title('mask')
+                #plt.show()
+                translated_objs_image = cv2.bitwise_and(translated_objs_image, cv2.bitwise_not(mask_eroded))
+                #_ = plt.subplot(111), plt.imshow(cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)), plt.title('image')
+                #plt.show()
+                break
+            #_ = plt.subplot(311), plt.imshow(cv2.cvtColor(mask_closed, cv2.COLOR_BGR2RGB)), plt.title('closed')
+            #_ = plt.subplot(312), plt.imshow(cv2.cvtColor(mask_open, cv2.COLOR_BGR2RGB)), plt.title('open')
+            #_ = plt.subplot(313), plt.imshow(cv2.cvtColor(overlapped, cv2.COLOR_BGR2RGB)), plt.title('and')
+            #plt.show()
+
+    #_ = plt.subplot(111), plt.imshow(cv2.cvtColor(translated_objs_image, cv2.COLOR_BGR2RGB)), plt.title('image doors closed or open')
+    #plt.show()
+
     # translational probability red and blu obstacles
     mean_tra = 0
     std_tra = 10
@@ -183,7 +237,7 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
 
     # translational probability green areas
     mean_green = 0
-    std_green = 5
+    std_green = 0.1
     norm_green = st.norm(loc=mean_green, scale=std_green)
 
     # rotational probability
@@ -195,13 +249,13 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
     p = 0.5
     bernoulli_clutter = st.bernoulli(p)
 
-    # Stage simulator map dimension
-    stage_dim = 20
-
-    translated_objs_image = image_objects_removed
     rectangles_info = []
     contours_green_translated = list(contours[colors.index("green")])
     green_idx = 0
+    image_width = image.shape[1]
+    image_height = image.shape[0]
+    size_width = sizey
+    size_height = sizex
 
     for j, (contour, obj_color_idx, object_image, movement_area) in enumerate(contour_obj_image_movement_area):
         if colors[obj_color_idx] == "green":
@@ -214,7 +268,7 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
 
             # Calculate the bounding rectangle
             x, y, w, h = cv2.boundingRect(contour)
-
+            
             # Translate it 
             x = x + dx 
             y = y + dy
@@ -223,13 +277,13 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
             center_x = x + (w / 2)
             center_y = y + (h / 2)
 
-            # Convert to a Cartesian system with the origin in the center of stage simulator
-            center_x = (stage_dim*center_x)/image.shape[1] - stage_dim / 2
-            center_y = (stage_dim*-center_y)/image.shape[1] + stage_dim / 2
+            # Convert to stage coordinates
+            center_x = (-size_width/2) + ((size_width/2 - (-size_width/2)) / (image_width - 0)) * (center_x - 0)
+            center_y = (-size_height/2) + ((size_height/2 - (-size_height/2)) / (image_height - 0)) * ((image_height-center_y) - 0)
 
             # Convert pixel units to the desired unit (n pixels per unit)
-            w = stage_dim*(w/image.shape[0])
-            h = stage_dim*(h/image.shape[1])
+            w = size_width*(w/image_width)
+            h = size_height*(h/image_height)
 
             # Add rectangle information to the list
             rectangles_info.append({
@@ -271,7 +325,8 @@ def extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap
         # Write JSON data to a file
         with open(rectangles_path, 'w') as json_file:
             json_file.write(json_data)
-            print("Saved rectangles info as {}".format(rectangles_path))
+            if not silent:
+                print("Saved rectangles info as {}".format(rectangles_path))
 
     return translated_objs_image
 
@@ -284,6 +339,15 @@ def check_positive(value):
         raise Exception("{} is not an integer".format(value))
     return value
 
+def check_positive_float(value):
+    try:
+        value = float(value)
+        if value <= 0:
+            raise argparse.ArgumentTypeError("{} is not a positive float".format(value))
+    except ValueError:
+        raise Exception("{} is not a float".format(value))
+    return value
+
 def check_positive_or_zero(value):
     try:
         value = int(value)
@@ -293,17 +357,26 @@ def check_positive_or_zero(value):
         raise Exception("{} is not an integer".format(value))
     return value
 
+def check_pose(value):
+    try:
+        ret_value = value.split()
+        if len(ret_value) != 2:
+            raise argparse.ArgumentTypeError(f"Given pose value \"{value}\" is not made of 2 numbers")
+        return (float(ret_value[0]), float(ret_value[1]))
+    except ValueError:
+        raise Exception("{} is not made of 2 numbers".format(value))
+
 
 def parse_args():
     # get an instance of RosPack with the default search paths
-    rospack = rospkg.RosPack()
+    #rospack = rospkg.RosPack()
     # get the file path for tirocinio
-    package_path = rospack.get_path('tirocinio')
+    #package_path = rospack.get_path('tirocinio')
 
     parser = argparse.ArgumentParser(description='Modify rgb maps automatically.')
-    parser.add_argument('--map', default=os.path.join(package_path, "maps_rgb_lab/map1/map1_rgb.png"),
+    parser.add_argument('--map', default="./src/tirocinio/maps_rgb_lab/map1/map1_rgb.png",
         help="Path to the rgb map file.", metavar="MAP_PATH")
-    parser.add_argument('--mask', default=os.path.join(package_path, "maps_rgb_lab/map1/map1_movement_mask.png"),
+    parser.add_argument('--mask', default="./src/tirocinio/maps_rgb_lab/map1/map1_rgb.png",
         help="Path to the rgb mask map file for movement areas. Each rgb object in the map will be moved within the yellow mask given in this file. If the object is none, then it can move freely.", metavar="MASK_PATH")
     parser.add_argument('--show', action='store_true',
         help="Use this to show a final recap.")
@@ -311,7 +384,7 @@ def parse_args():
         help="Use this to save the produced map and rectangles info.")
     parser.add_argument("-b", "--batch", type=check_positive, default=1, metavar="N",
         help="Use this to produce N maps and save them.")    
-    parser.add_argument("-w", "--worlds", type=check_positive_or_zero, default=0, metavar="N",
+    parser.add_argument("--worlds", type=check_positive_or_zero, default=0, metavar="N",
         help="Use this to produce N maps and save them.")    
     parser.add_argument('--no-timestamp', action='store_true',
         help="""Use this save a single image without timestamp. If image.png already exists, it will create image_n.png
@@ -321,10 +394,18 @@ def parse_args():
     parser.add_argument('--steps', action='store_true',
         help="Use this to show the processing steps.")
     parser.add_argument("--speedup", type=check_positive, default=10, metavar="SPEEDUP",
-        help="Use this to adjust stage simulation speed. Higher is faster but heavier on the CPU.") 
+        help="Use this to adjust stage simulation speed. Higher is faster but heavier on the CPU.")
+    parser.add_argument('--pose', type=check_pose, default=(0, 0), metavar="X Y",
+        help="Robot pose X and Y coordinates.")
+    parser.add_argument('--scale', type=check_positive_float, default=0.035888, metavar="PIXELS",
+        help="Number of meters per pixel in png map.")
+    parser.add_argument("--world-num", type=check_positive_or_zero, default=None, metavar="N",
+        help="Use this to produce a maps that ends in N and save it. Setting this argument overrides --worlds.")    
+    parser.add_argument('--silent', action='store_true',
+        help="Use this to avoid printing info.")   
     return parser.parse_args()
 
-def get_world_text(image, name, speedup):
+def get_world_text(image, name, speedup, pose, scale, sizex, sizey):
     return f"""
     # World {name}
     define turtlebot3 position
@@ -350,9 +431,9 @@ def get_world_text(image, name, speedup):
     (
         sensor(
             # ranger-specific properties
-            range [ 0.06 4.095 ]
-            fov 240.0
-            samples 683
+            range [ 0.06 15 ]
+            fov 359
+            samples 1022
 
             # noise [range_const range_prop angular]
             # range_const - describes constant noise. This part does not depends on range
@@ -396,7 +477,7 @@ def get_world_text(image, name, speedup):
     window
     (
         size [ 700.000 660.000 ] # in pixels (size [width height])
-        scale 27.864467231386534  # pixels per meter
+        scale {1/scale}  # pixels per meter
         center [ 0  0 ]
         rotate [ 0  0 ]
                     
@@ -407,7 +488,7 @@ def get_world_text(image, name, speedup):
     floorplan
     ( 
         name  "turtlebot3-stage"
-        size [ 20.0 20 1.0 ] # size [x y z]
+        size [ {sizey} {sizex} 1.0 ] # size [x y z]
         pose [0 0 0 0]
         bitmap "bitmaps/image{image}.png" # bitmap: solo il nero è renderizzato
     )
@@ -415,7 +496,7 @@ def get_world_text(image, name, speedup):
     (		  
         # can refer to the robot by this name
         name  "turtlebot3"
-        pose [ -5 4 0 0 ] 
+        pose [ {pose[0]} {pose[1]} 0 0 ] 
 
         sick()
     )
@@ -435,19 +516,28 @@ def main():
     movement_mask_image_path = args.mask
     worlds = args.worlds
     speedup = args.speedup
+    pose = args.pose
+    scale = args.scale
+    world_num = args.world_num
+    silent = args.silent
 
 
     movement_mask_image = cv2.imread(movement_mask_image_path, cv2.IMREAD_COLOR)
         
     image = cv2.imread(image_path, cv2.IMREAD_COLOR)
 
-    if worlds == 0:
+    sizex = image.shape[0]
+    sizex = sizex/(1/scale)
+    sizey = image.shape[1]
+    sizey = sizey/(1/scale)
+
+    if worlds == 0 and world_num is None:
         if batch == 1:
             if no_timestamp:
                 rectangles_path = os.path.join(base_dir, "rectangles.json")
             else:
                 rectangles_path = os.path.join(base_dir, 'rectangles_' + str(time.time_ns()) + '.json')
-            image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=save_map)
+            image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=save_map, sizex=sizex, sizey=sizey, silent=silent)
 
             if save_map:
                 if no_timestamp:
@@ -462,26 +552,52 @@ def main():
                         filename = os.path.join(base_dir, "image_" + str(time.time_ns()) + ".png")
                 
                 cv2.imwrite(filename, image_modified)
-                print("Saved map as {}".format(filename))
+                if not silent:
+                    print("Saved map as {}".format(filename))
         else:
             for i in range(batch):
                 rectangles_path = os.path.join(base_dir, 'rectangles_' + str(i) + '.json')
-                image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True)
+                image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True, sizex=sizex, sizey=sizey, silent=silent)
                 filename = os.path.join(base_dir, "image_" + str(i) + ".png")
                 cv2.imwrite(filename, image_modified)
-                print("Saved map as {}".format(filename))
+                if not silent:
+                    print("Saved map as {}".format(filename))
+    elif world_num is not None:
+
+        name = os.path.basename(os.path.splitext(image_path)[0])
+        i = world_num
+        rectangles_path = os.path.join(base_dir, "bitmaps/rectangles{}.json".format(i))
+        bitmaps_dir = os.path.join(base_dir, "bitmaps")
+        if not os.path.exists(bitmaps_dir) or not os.path.isdir(bitmaps_dir):
+            os.makedirs(bitmaps_dir)
+        image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True, sizex=sizex, sizey=sizey, silent=silent)
+        filename = os.path.join(base_dir, "bitmaps/image{}.png".format(i))
+        cv2.imwrite(filename, image_modified)
+        if not silent:
+            print("Saved map as {}".format(filename))
+        worldfile_path = os.path.join(base_dir, "world{}.world".format(i))
+        with open(worldfile_path, "w", encoding="utf-8") as worldfile:
+            worldfile.write(get_world_text(i, name, speedup, pose, scale, sizex, sizey))
+            if not silent:
+                print("Saved worldfile as {}".format(worldfile_path))
     else:
+
         name = os.path.basename(os.path.splitext(image_path)[0])
         for i in range(0, worlds):
             rectangles_path = os.path.join(base_dir, "bitmaps/rectangles{}.json".format(i))
-            image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True)
+            bitmaps_dir = os.path.join(base_dir, "bitmaps")
+            if not os.path.exists(bitmaps_dir) or not os.path.isdir(bitmaps_dir):
+                os.makedirs(bitmaps_dir)
+            image_modified = extract_color_pixels(image, movement_mask_image, rectangles_path, show_recap=show_recap, show_steps=show_steps, save_map=True, sizex=sizex, sizey=sizey, silent=silent)
             filename = os.path.join(base_dir, "bitmaps/image{}.png".format(i))
             cv2.imwrite(filename, image_modified)
-            print("Saved map as {}".format(filename))
+            if not silent:
+                print("Saved map as {}".format(filename))
             worldfile_path = os.path.join(base_dir, "world{}.world".format(i))
             with open(worldfile_path, "w", encoding="utf-8") as worldfile:
-                worldfile.write(get_world_text(i, name, speedup))
-                print("Saved worldfile as {}".format(worldfile_path))
+                worldfile.write(get_world_text(i, name, speedup, pose, scale, sizex, sizey))
+                if not silent:
+                    print("Saved worldfile as {}".format(worldfile_path))
 
 if __name__ == "__main__":
     main()
