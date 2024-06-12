@@ -12,7 +12,7 @@ def make_map(args, world_num):
     pose = args.pose
     scale = args.scale
 
-    sp.run(["python3", os.path.join(os.getcwd(), "src/tirocinio/scripts/map_rgb_simul.py"), "--map", image_path, "--mask", movement_mask_image_path,
+    sp.run(["python3", os.path.join(os.getcwd(), "src/exp_cov/scripts/map_rgb_simul.py"), "--map", image_path, "--mask", movement_mask_image_path,
         "--dir", os.path.join(os.getcwd(), "worlds"), "--speedup", str(speedup), "--pose", f"{pose[0]} {pose[1]}", "--scale", str(scale), "--world-num", str(world_num), "--silent"])
 
     return(f"world{world_num}.world")
@@ -91,9 +91,9 @@ def check_positive_float(value):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Start exploration in docker containers.')
-    parser.add_argument('--map', default=os.path.join(os.getcwd(), "src/tirocinio/maps_rgb_lab/map1/map1_rgb.png"),
+    parser.add_argument('--map', default=os.path.join(os.getcwd(), "src/exp_cov/maps_rgb_lab/map1/map1_rgb.png"),
         help="Path to the rgb map file.", metavar="MAP_PATH")
-    parser.add_argument('--mask', default=os.path.join(os.getcwd(), "src/tirocinio/maps_rgb_lab/map1/map1_movement_mask.png"),
+    parser.add_argument('--mask', default=os.path.join(os.getcwd(), "src/exp_cov/maps_rgb_lab/map1/map1_movement_mask.png"),
         help="Path to the rgb mask map file for movement areas. Each rgb object in the map will be moved within the yellow mask given in this file. If the object is none, then it can move freely.", metavar="MASK_PATH")
     parser.add_argument("--worlds", type=check_positive, default=1, metavar="WORLDS",
         help="Use this to produce WORLDS world files.")    
