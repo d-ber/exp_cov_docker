@@ -20,6 +20,9 @@ def make_map(args, world_num):
 def spawn_container(i, bar, no_bag, args):
     time.sleep(4)
     mapName = make_map(args, i)
+    
+    if os.path.exists(args.dir):
+        os.makedirs(args.dir)
 
     bag_option = ""
     record_all_option = ""
@@ -32,7 +35,7 @@ def spawn_container(i, bar, no_bag, args):
     launchstr = f"""docker run -it \\
         --mount type=bind,source=./worlds,target=/root/catkin_ws/src/my_navigation_configs/worlds \\
         --mount type=bind,source=./src/my_navigation_configs/params,target=/root/catkin_ws/src/my_navigation_configs/params \\
-        --mount type=bind,source=/mnt/B83C78593C78149A/TIROCINIO/RUN{dir_debug},target=/root/catkin_ws/src/my_navigation_configs/runs/outputs \\
+        --mount type=bind,source={args.dir}/RUN{dir_debug},target=/root/catkin_ws/src/my_navigation_configs/runs/outputs \\
         'rosnoetic:slam_toolbox' /root/catkin_ws/src/my_navigation_configs/worlds/{mapName} {bag_option} {record_all_option}"""
     p = sp.Popen(launchstr, shell=True, stdout=sp.DEVNULL)
     p.wait()
@@ -105,10 +108,12 @@ def parse_args():
         help="Use this to disable bag recording, default behaviour is enabled.") 
     parser.add_argument('--pose', type=check_pose, default=(0, 0), metavar="X Y",
         help="Robot pose X and Y coordinates.")
-    parser.add_argument('--scale', type=check_positive_float, default=0.035888, metavar="PIXELS",
+    parser.add_argument('--scale', type=check_positive_float, default=0.035888, metavar="METERS/PIXELS",
         help="Number of meters per pixel in png map.")
     parser.add_argument("--bag-all",  action='store_true', default=False,
         help="Use this to record all topics, default behaviour is disabled, i.e. only /odom /base_pose_ground_truth and /base_scan are recorded.") 
+    parser.add_argument("--dir", "-d", default=os.getcwd(),
+        help="Use this to set the output directory.") 
     return parser.parse_args()
 
 if __name__ == "__main__":
