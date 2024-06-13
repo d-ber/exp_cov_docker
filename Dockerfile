@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-noetic-map-server \
     ros-noetic-slam-toolbox \
     ros-noetic-stage-ros \
+    ros-noetic-gmapping \
     ros-noetic-tf2-sensor-msgs \
     ros-geometry-msgs \
     && rm -rf /var/lib/apt/lists/*

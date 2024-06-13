@@ -1,5 +1,4 @@
 import os
-import sys
 import signal
 import time
 from os import killpg, getpgid, setsid, makedirs, listdir, remove
@@ -89,7 +88,7 @@ def saveMap(folder):
         print("cannot convert")
 
 
-def checkActiveGoal(process, folder):
+def checkActiveGoal(process, folder, waypoint_navigation):
     global lastUpdate
     MAX_EXPLORE = 5
     explore_num = 0
@@ -100,8 +99,12 @@ def checkActiveGoal(process, folder):
         if process.poll() is not None or rospy.get_rostime().secs - lastUpdate > 500:
             if explore_num < MAX_EXPLORE:
                 print("Restarting explore node to finish exploration")
-                p = Popen("rosnode kill explore", shell=True)
-                p.wait()
+                if waypoint_navigation:
+                    p = Popen("rosnode kill waypoint_sender", shell=True)
+                    p.wait()
+                else:
+                    p = Popen("rosnode kill explore", shell=True)
+                    p.wait()
                 explore_num += 1
                 lastUpdate = rospy.get_rostime().secs - 100
                 continue
@@ -112,7 +115,16 @@ def checkActiveGoal(process, folder):
                 return
 
 
-def launchNavigation(world, folder, rectangles_path, no_bag, record_all_topics):
+def waypointNavigation(p, folder):
+    # TODO: save map each waypoint?
+    print("Started waypoint navigation Thread.")
+    launchString = f"rosrun exp_cov waypoint_navigation.py -p {os.path.expanduser('~/catkin_ws/src/my_navigation_configs/worlds/poses.txt')}"
+    process = Popen(launchString, shell=True, preexec_fn=setsid)
+    process.wait()
+    saveMap(folder)
+    killProcess(p)
+
+def launchNavigation(world, folder, rectangles_path, no_bag, record_all_topics, waypoint_navigation):
     """
     Calls the launch file and starts the exploration, waits until the process is done
     """
@@ -124,30 +136,45 @@ def launchNavigation(world, folder, rectangles_path, no_bag, record_all_topics):
     if record_all_topics:
         record_all_topics_arg = "true"
     try:
-        launchString = (
-            "roslaunch my_navigation_configs exploreambient_slam_toolbox.launch worldfile:="
-            + world
-            + " bag:="
-            + folder
-            + "bag"
-            + ".bag "
-            + " rectangles_path:=" 
-            + rectangles_path
-            + " record_bag:="
-            + bag_arg
-            + " bag_all:="
-            + record_all_topics_arg
-        )
+        if waypoint_navigation:
+            launchString = f"roslaunch my_navigation_configs cover_ambient_slam_toolbox.launch worldfile:={world} bag:={folder}bag.bag record_bag:={bag_arg} bag_all:={record_all_topics_arg}"
+        
+            p = Popen(launchString, shell=True, preexec_fn=setsid)
 
-        p = Popen(launchString, shell=True, preexec_fn=setsid)
+            time.sleep(5)
 
-        time.sleep(5)
+            goal_listener()
+            Thread(None, checkActiveGoal, "goal_worker", [p, folder, waypoint_navigation], daemon=True).start()
+            Thread(None, getMap, "map_worker", [p, folder], daemon=True).start()
+            Thread(group=None, target=waypointNavigation, name="waypoint_worker", args=[p, folder], daemon=True).start()
+            p.wait()
+            return
 
-        goal_listener()
-        Thread(None, checkActiveGoal, "goal_worker", [p, folder], daemon=True).start()
-        Thread(None, getMap, "map_worker", [p, folder], daemon=True).start()
-        p.wait()
-        return
+        else:
+            launchString = (
+                "roslaunch my_navigation_configs exploreambient_slam_toolbox.launch worldfile:="
+                + world
+                + " bag:="
+                + folder
+                + "bag"
+                + ".bag "
+                + " rectangles_path:=" 
+                + rectangles_path
+                + " record_bag:="
+                + bag_arg
+                + " bag_all:="
+                + record_all_topics_arg
+            )
+
+            p = Popen(launchString, shell=True, preexec_fn=setsid)
+
+            time.sleep(5)
+
+            goal_listener()
+            Thread(None, checkActiveGoal, "goal_worker", [p, folder, waypoint_navigation], daemon=True).start()
+            Thread(None, getMap, "map_worker", [p, folder], daemon=True).start()
+            p.wait()
+            return
 
     except KeyboardInterrupt:
         print("KILL PROCESS")
@@ -167,9 +194,9 @@ def extract_number(worldname):
         return num.group(0)
     return None
 
-def exploreWorlds(project_path, world_path, no_bag, record_all_topics):
+def exploreWorlds(project_path, world_path, no_bag, record_all_topics, waypoint_navigation):
     """
-    Given a folder with world file it runs 5 times each environment exploration
+    Given a folder with world file it runs exploration or coverage
     """
     out_dir = project_path + "/runs/outputs/"
     worldname = "UNKOWN"
@@ -205,7 +232,7 @@ def exploreWorlds(project_path, world_path, no_bag, record_all_topics):
             time.sleep(4)
 
             print("START")
-            launchNavigation(world_path, run_folder, rect_path, no_bag, record_all_topics)
+            launchNavigation(world_path, run_folder, rect_path, no_bag, record_all_topics, waypoint_navigation)
             print("END")
             time.sleep(1)
 
@@ -217,6 +244,8 @@ def parse_args():
         help="Use this to disable bag recording, default behaviour is enabled.") 
     parser.add_argument("--bag-all",  action='store_true', default=False,
         help="Use this to record all topics, default behaviour is disabled, i.e. only /odom /base_pose_ground_truth and /base_scan are recorded.") 
+    parser.add_argument("--waypoints",  action='store_true', default=False,
+        help="Use this to set the working mode to coverage instead of greedy frontier-based exploration. If true it will look for a pose file at os.path.expanduser(\"~/catkin_ws/src/my_navigation_configs\") .")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -225,6 +254,7 @@ if __name__ == "__main__":
     world_path = args.world
     no_bag = args.no_bag
     record_all_topics = args.bag_all
+    waypoint_navigation = args.waypoints
     # retrieve current path
     project = os.path.expanduser("~/catkin_ws/src/my_navigation_configs")        
-    exploreWorlds(project, world_path, no_bag, record_all_topics)
+    exploreWorlds(project, world_path, no_bag, record_all_topics, waypoint_navigation)
