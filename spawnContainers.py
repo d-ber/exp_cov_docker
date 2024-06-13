@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 import progressbar
 import time
 import argparse
+import shutil
+
 
 def make_map(args, world_num):
     image_path = args.map
@@ -21,22 +23,26 @@ def spawn_container(i, bar, no_bag, args):
     time.sleep(4)
     mapName = make_map(args, i)
     
-    if os.path.exists(args.dir):
+    if not os.path.exists(args.dir):
         os.makedirs(args.dir)
 
     bag_option = ""
     record_all_option = ""
     dir_debug = ""
+    waypoint_option = ""
     if no_bag:
         bag_option = "--no-bag"
     if args.bag_all:
         record_all_option = "--bag-all"
         dir_debug = "_DEBUG"
+    if args.coverage:
+        waypoint_option = "--waypoints"
     launchstr = f"""docker run -it \\
         --mount type=bind,source=./worlds,target=/root/catkin_ws/src/my_navigation_configs/worlds \\
         --mount type=bind,source=./src/my_navigation_configs/params,target=/root/catkin_ws/src/my_navigation_configs/params \\
+        --mount type=bind,source=./src/exp_cov/param,target=/root/catkin_ws/src/exp_cov/param \\
         --mount type=bind,source={args.dir}/RUN{dir_debug},target=/root/catkin_ws/src/my_navigation_configs/runs/outputs \\
-        'rosnoetic:slam_toolbox' /root/catkin_ws/src/my_navigation_configs/worlds/{mapName} {bag_option} {record_all_option}"""
+        'rosnoetic:slam_toolbox' /root/catkin_ws/src/my_navigation_configs/worlds/{mapName} {bag_option} {record_all_option} {waypoint_option}"""
     p = sp.Popen(launchstr, shell=True, stdout=sp.DEVNULL)
     p.wait()
     bar.increment()
@@ -51,6 +57,8 @@ def purge_worlds():
 def main(workers: int, no_bag, args):
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
+        if args.coverage:
+            shutil.copyfile(args.poses, os.path.join(os.getcwd(), "worlds", "poses.txt"))
         with progressbar.ProgressBar(max_value=args.worlds).start() as bar:
             futures = []
             for i in range(args.worlds):
@@ -114,6 +122,10 @@ def parse_args():
         help="Use this to record all topics, default behaviour is disabled, i.e. only /odom /base_pose_ground_truth and /base_scan are recorded.") 
     parser.add_argument("--dir", "-d", default=os.getcwd(),
         help="Use this to set the output directory.") 
+    parser.add_argument("--coverage", action='store_true', default=False,
+        help="Use this to set the working mode to coverage instead of greedy frontier-based exploration. If true, you should give a pose file.") 
+    parser.add_argument("--poses", default=os.path.join(os.getcwd(), "src/exp_cov/other/poses.txt"), metavar="POSE_FILE_PATH",
+        help="Use this to set the poses to go to during coverage.") 
     return parser.parse_args()
 
 if __name__ == "__main__":

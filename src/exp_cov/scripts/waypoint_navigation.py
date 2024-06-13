@@ -153,6 +153,7 @@ class waypoint_sender():
             else:
                 rospy.loginfo("Final goal preempted!")
                 rospy.signal_shutdown("Final goal preempted!")
+                rospy.signal_shutdown("Finished navigation.")
                 return
         elif status == GoalStatus.SUCCEEDED:
             rospy.loginfo(f"Goal pose {self.goal_cnt-1} reached.") 
@@ -161,6 +162,7 @@ class waypoint_sender():
             else:
                 rospy.loginfo("Final goal pose reached!")
                 rospy.signal_shutdown("Final goal pose reached!")
+                rospy.signal_shutdown("Finished navigation.")
                 return
         elif status == GoalStatus.ABORTED:
             rospy.loginfo(f"Goal pose {self.goal_cnt-1} was aborted by the Action Server. Skipping it")
@@ -169,6 +171,7 @@ class waypoint_sender():
             else:
                 rospy.loginfo("Final goal pose aborted.")
                 rospy.signal_shutdown("Final goal pose aborted.")
+                rospy.signal_shutdown("Finished navigation.")
             return
         elif status == GoalStatus.REJECTED:
             if self.goal_cnt < len(self.pose_seq):
@@ -177,6 +180,7 @@ class waypoint_sender():
             else:
                 rospy.loginfo("Final goal pose rejected.")
                 rospy.signal_shutdown("Final goal pose rejected.")
+                rospy.signal_shutdown("Finished navigation.")
             return
         elif status == GoalStatus.RECALLED:
             if self.goal_cnt < len(self.pose_seq):
@@ -184,6 +188,7 @@ class waypoint_sender():
             else:
                 rospy.loginfo("Final goal pose recalled.")
                 rospy.signal_shutdown("Final goal pose recalled.")
+                rospy.signal_shutdown("Finished navigation.")
                 return
 
     def handle_feedback(self, gh, feedback):
