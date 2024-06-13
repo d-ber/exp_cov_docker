@@ -1,0 +1,37 @@
+<launch>
+
+	<!-- Some general parameters -->
+	<arg name="robot_name" default="turtlebot" />
+	<arg name="log_path" default="/dev/null"/>
+	<arg name="use_sim_time" default="true" />
+	<arg name="bag_all" default="false"/>
+	<arg name="record_bag" default="true"/>
+	<param name="use_sim_time" value="true" />
+
+	<!-- Start Stage simulator with a given environment -->
+	<node name="Stage" pkg="stage_ros" type="stageros" args="$(arg worldfile)">
+		<param name="base_watchdog_timeout" value="0.1" />
+	</node>
+
+	<!-- Record ground truth values -->
+	<group if="$(arg record_bag)">
+		<group if="$(arg bag_all)">
+			<node name="recorder" pkg="rosbag" type="record" args="--lz4 -O $(arg bag) -a"/>
+		</group>
+		<group unless="$(arg bag_all)">
+			<node name="recorder" pkg="rosbag" type="record" args="--lz4 -O $(arg bag) /base_pose_ground_truth /odom /base_scan"/>
+		</group>
+	</group>
+	
+	<!-- RVIZ to view the visualization -->
+	<!--node name="RVIZ" pkg="rviz" type="rviz" args=" -d $(find my_navigation_configs)/launch/custom.rviz" /-->
+
+	<!-- simulation parameters -->
+    <param name="log_path" value="$(arg log_path)" />
+	<param name="robot_name" value="$(arg robot_name)" />
+
+    <remap from="scan" to="base_scan" />
+
+	<include file="$(find exp_cov)/launch/waypoint_navigation.launch"/>
+
+</launch>
