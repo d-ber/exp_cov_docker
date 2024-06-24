@@ -22,26 +22,24 @@ def make_map(args, world_num):
 def spawn_container(i, bar, no_bag, args):
     time.sleep(4)
     mapName = make_map(args, i)
-    
-    if not os.path.exists(args.dir):
-        os.makedirs(args.dir)
 
+    run_dir = os.path.join(args.dir, "RUN")
     bag_option = ""
     record_all_option = ""
-    dir_debug = ""
     waypoint_option = ""
     if no_bag:
         bag_option = "--no-bag"
     if args.bag_all:
         record_all_option = "--bag-all"
-        dir_debug = "_DEBUG"
+        run_dir += "_DEBUG"
+    os.makedirs(run_dir, exist_ok = True)
     if args.coverage:
         waypoint_option = "--waypoints"
     launchstr = f"""docker run -it \\
         --mount type=bind,source=./worlds,target=/root/catkin_ws/src/my_navigation_configs/worlds \\
         --mount type=bind,source=./src/my_navigation_configs/params,target=/root/catkin_ws/src/my_navigation_configs/params \\
         --mount type=bind,source=./src/exp_cov/param,target=/root/catkin_ws/src/exp_cov/param \\
-        --mount type=bind,source={args.dir}/RUN{dir_debug},target=/root/catkin_ws/src/my_navigation_configs/runs/outputs \\
+        --mount type=bind,source={run_dir},target=/root/catkin_ws/src/my_navigation_configs/runs/outputs \\
         'rosnoetic:slam_toolbox' /root/catkin_ws/src/my_navigation_configs/worlds/{mapName} {bag_option} {record_all_option} {waypoint_option}"""
     p = sp.Popen(launchstr, shell=True, stdout=sp.DEVNULL)
     p.wait()
