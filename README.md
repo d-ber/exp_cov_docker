@@ -1,5 +1,5 @@
-# Experince and Coverage on Docker
-This repo contains code and configuration to simulate experience-based coverage and greedy frontier-based exploration using Docker.
+# Experience-based Coverage on Docker
+This repo contains code and configurations to simulate experience-based coverage and greedy frontier-based exploration using Docker.
 
 ## Usage
 First of all, build the Docker image:
@@ -20,7 +20,7 @@ Exploration example:
 $ python spawnContainers.py --worlds 1 --workers 1 --speedup 10 --map .src/exp_cov/maps_rgb_lab/map1/map1_rgb.png --mask ./src/exp_cov/maps_rgb_lab/map1/map1_movement_mask.png  --pose "-1.0 0.0" --scale 0.035888
 ```
 
-To better understand command line arguments given to the script, check the help:
+To better understand the command line arguments given to the script, check the help:
 ```shell
 $ python spawnContainers.py -h
 ```
